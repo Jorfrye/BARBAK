@@ -4,6 +4,9 @@ config.json
 # Runtime state (message watermark)
 .parker_todo_state.json
 
+# Log from the scheduled (launchd) job
+schedule.log
+
 # The generated TODO list is personal; keep it local by default.
 PARKER_TODO.md
 
