@@ -1,0 +1,14 @@
+# Local configuration and secrets
+config.json
+
+# Runtime state (message watermark)
+.parker_todo_state.json
+
+# The generated TODO list is personal; keep it local by default.
+PARKER_TODO.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

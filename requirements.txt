@@ -1,0 +1,3 @@
+# Only needed if you use the "claude" extractor. The keyword extractor and the
+# message reader use the Python standard library only.
+anthropic>=0.40.0
