@@ -37,14 +37,16 @@ def _keyword_extract(messages: list[Message], cfg: Config) -> list[str]:
     return todos
 
 
-def _todos_from_response(text: str) -> list[str] | None:
+def _todos_from_response(text: str) -> list[dict] | None:
     """Parse the ``{"todos": [...]}`` object out of a model response.
 
     Scans for the first balanced-brace JSON object (ignoring braces inside
     strings) that parses to a dict with a ``todos`` key, so stray braces in the
-    model's prose don't break parsing. Returns the todo list (possibly empty)
-    on success, or ``None`` if no such object could be parsed — the ``None``
-    signals the caller to fall back to keyword extraction.
+    model's prose don't break parsing. Each item is normalized to a dict with
+    ``task`` and ``type`` ("commitment", "request", or "" when unknown). Plain
+    strings are accepted too (type ""). Returns the list (possibly empty) on
+    success, or ``None`` if no object could be parsed — the ``None`` signals the
+    caller to fall back to keyword extraction.
     """
     for candidate in _iter_json_objects(text):
         try:
@@ -52,8 +54,27 @@ def _todos_from_response(text: str) -> list[str] | None:
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict) and "todos" in parsed:
-            return [str(t).strip() for t in parsed["todos"] if str(t).strip()]
+            items: list[dict] = []
+            for entry in parsed["todos"]:
+                if isinstance(entry, dict):
+                    task = str(entry.get("task", "")).strip()
+                    kind = str(entry.get("type", "")).strip().lower()
+                else:
+                    task, kind = str(entry).strip(), ""
+                if task:
+                    items.append(
+                        {"task": task, "type": kind if kind in ("commitment", "request") else ""}
+                    )
+            return items
     return None
+
+
+def _render_items(items: list[dict]) -> list[str]:
+    """Format classified todos into display strings: Parker's own commitments
+    first (plain), then things he asked the reader to do (labeled)."""
+    commitments = [i["task"] for i in items if i["type"] != "request"]
+    requests = [i["task"] for i in items if i["type"] == "request"]
+    return commitments + [f"{task}  — (Parker asked you)" for task in requests]
 
 
 def _iter_json_objects(text: str):
@@ -87,13 +108,18 @@ def _iter_json_objects(text: str):
 
 
 _SYSTEM_PROMPT = (
-    "You extract concrete, actionable TODO items from text messages a person "
-    "named {name} sends. Only include things that represent a task, commitment, "
-    "reminder, or request that someone needs to act on. Ignore greetings, "
-    "chit-chat, questions that aren't asking for an action, and anything already "
-    "clearly completed. Rewrite each item as a short imperative task (e.g. "
-    "'Send the invoice to accounting'). Return STRICT JSON: an object with a "
-    "single key \"todos\" whose value is an array of strings. Return an empty "
+    "You maintain a to-do list FOR {name}, who tends to forget his own "
+    "commitments. Read text messages that {name} sends and extract concrete, "
+    "actionable items he needs to remember. PRIORITIZE things {name} himself "
+    "said he would do — his promises and commitments (e.g. 'I'll send the "
+    "contract Monday', 'I can drop it off tomorrow', 'let me check and get back "
+    "to you'). Also capture direct requests {name} makes of the reader. Ignore "
+    "greetings, chit-chat, and anything already clearly completed. Rewrite each "
+    "item as a short imperative task (e.g. 'Send the contract by Monday'). "
+    "Return STRICT JSON: an object with a single key \"todos\" whose value is an "
+    "array of objects, each with \"task\" (the imperative task string) and "
+    "\"type\" — \"commitment\" if {name} is the one who will do it, or "
+    "\"request\" if {name} is asking the reader to do something. Return an empty "
     "array if there are no tasks."
 )
 
@@ -135,10 +161,13 @@ def _claude_extract(messages: list[Message], cfg: Config) -> list[str] | None:
         # Network/auth/rate-limit/etc.: treat Claude as unavailable so the
         # caller falls back to keyword extraction rather than crashing.
         return None
-    # Returns the parsed todo list, or None if the response wasn't parseable
-    # (which makes extract_todos fall back to keywords instead of dropping the
-    # batch as "no todos found").
-    return _todos_from_response(text)
+    # None if the response wasn't parseable (so extract_todos falls back to
+    # keywords instead of dropping the batch as "no todos found"); otherwise the
+    # classified items rendered commitments-first.
+    items = _todos_from_response(text)
+    if items is None:
+        return None
+    return _render_items(items)
 
 
 def extract_todos(messages: list[Message], cfg: Config) -> list[str]:
