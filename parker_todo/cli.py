@@ -50,7 +50,11 @@ def run(cfg: Config, dry_run: bool = False, reset: bool = False) -> int:
         return 0
 
     added = add_todos(
-        Path(cfg.todo_file), todos, cfg.contact_name, date.today().isoformat()
+        Path(cfg.todo_file),
+        todos,
+        cfg.contact_name,
+        date.today().isoformat(),
+        dedup_threshold=cfg.dedup_threshold,
     )
     if added:
         print(f"Added {len(added)} new TODO item(s) to {cfg.todo_file}:")

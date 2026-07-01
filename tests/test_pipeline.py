@@ -206,6 +206,60 @@ def test_keyword_does_not_split_on_abbreviation():
     assert todos == ["Can you e.g. send the blue folder"]
 
 
+def test_keyword_filters_banter_without_action_verb():
+    # Real-world false positive: a weak trigger ("have to") with no action verb.
+    cfg = Config(extractor="keywords")
+    banter = _msg("Girl I'm not a bitch til I have to be im a Virgo man")
+    assert extract_todos([banter], cfg) == []
+
+
+def test_keyword_keeps_real_tasks_from_screenshot():
+    cfg = Config(extractor="keywords")
+    msgs = [
+        _msg("Please call back"),
+        _msg("May need to take Cary van back to thermo"),
+        _msg("Hey can you send me card deets"),
+    ]
+    todos = extract_todos(msgs, cfg)
+    assert any("call back" in t.lower() for t in todos)
+    assert any("thermo" in t.lower() for t in todos)      # weak trigger + "take"
+    assert any("card deets" in t.lower() for t in todos)  # strong "can you"
+
+
+def test_noise_patterns_drop_matching_items():
+    cfg = Config(extractor="keywords", noise_patterns=[r"\bvirgo\b", r"card deets"])
+    msgs = [_msg("Hey can you send me card deets"), _msg("Please call back")]
+    todos = extract_todos(msgs, cfg)
+    assert not any("card deets" in t.lower() for t in todos)
+    assert any("call back" in t.lower() for t in todos)
+
+
+def test_repeat_rephrasing_is_deduped(tmp_path: Path):
+    f = tmp_path / "T.md"
+    add_todos(f, ["Take the Cary van back to thermo"], "P", "2026-07-01")
+    # Same task, slightly reworded / re-said later — should NOT be re-added.
+    added = add_todos(f, ["take Cary van back to thermo"], "P", "2026-07-02")
+    assert added == []
+    assert f.read_text().count("- [ ]") == 1
+
+
+def test_repeat_within_one_batch_is_deduped(tmp_path: Path):
+    f = tmp_path / "T.md"
+    added = add_todos(
+        f,
+        ["Send Marissa the tank tops", "send the tank tops to marissa"],
+        "P",
+        "2026-07-01",
+    )
+    assert len(added) == 1
+
+
+def test_distinct_tasks_not_over_merged(tmp_path: Path):
+    f = tmp_path / "T.md"
+    added = add_todos(f, ["Call mom", "Call the dentist"], "P", "2026-07-01")
+    assert len(added) == 2  # different tasks must both survive
+
+
 # --- Claude response parsing -------------------------------------------------
 
 def test_json_parse_with_prose_braces():

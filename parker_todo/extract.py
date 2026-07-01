@@ -20,9 +20,21 @@ from .messages import Message
 _ABBREV = r"(?<!\be\.g)(?<!\bi\.e)(?<!\betc)(?<!\bMr)(?<!\bMrs)(?<!\bDr)(?<!\bvs)"
 _SENTENCE_SPLIT = re.compile(_ABBREV + r"(?<=[.!?])\s+(?=[\"'A-Z0-9])|\n+")
 
+# "Strong" triggers are direct asks/reminders — a sentence containing one is
+# treated as a task on its own. Every other ("weak") trigger only counts when
+# the sentence also names an action verb, which keeps chit-chat like
+# "I have to be a Virgo man" out of the list.
+_STRONG_TRIGGERS = frozenset(
+    {
+        "can you", "could you", "would you", "please", "don't forget",
+        "dont forget", "remember to", "remind me", "make sure", "need you to",
+    }
+)
+
 
 def _keyword_extract(messages: list[Message], cfg: Config) -> list[str]:
     triggers = [t.lower() for t in cfg.keyword_triggers]
+    verbs = [v.lower() for v in cfg.action_verbs]
     todos: list[str] = []
     for msg in messages:
         for sentence in _SENTENCE_SPLIT.split(msg.text):
@@ -32,9 +44,20 @@ def _keyword_extract(messages: list[Message], cfg: Config) -> list[str]:
             if not s:
                 continue
             low = s.lower()
-            if any(t in low for t in triggers):
+            has_strong = any(t in low for t in triggers if t in _STRONG_TRIGGERS)
+            has_weak = any(t in low for t in triggers)
+            has_action = any(re.search(rf"\b{re.escape(v)}\b", low) for v in verbs)
+            if has_strong or (has_weak and has_action):
                 todos.append(s.rstrip(".!? "))
     return todos
+
+
+def filter_noise(todos: list[str], cfg: Config) -> list[str]:
+    """Drop todos matching any configured noise regex (case-insensitive)."""
+    if not cfg.noise_patterns:
+        return todos
+    compiled = [re.compile(p, re.IGNORECASE) for p in cfg.noise_patterns]
+    return [t for t in todos if not any(p.search(t) for p in compiled)]
 
 
 def _todos_from_response(text: str) -> list[dict] | None:
@@ -174,9 +197,10 @@ def extract_todos(messages: list[Message], cfg: Config) -> list[str]:
     """Extract TODO strings from messages using the configured backend."""
     if not messages:
         return []
+    result = None
     if cfg.extractor == "claude":
         result = _claude_extract(messages, cfg)
-        if result is not None:
-            return result
-        # Fall back silently to keywords if Claude isn't usable.
-    return _keyword_extract(messages, cfg)
+        # result is None only when Claude is unusable; fall back to keywords.
+    if result is None:
+        result = _keyword_extract(messages, cfg)
+    return filter_noise(result, cfg)

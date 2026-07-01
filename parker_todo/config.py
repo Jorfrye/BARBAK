@@ -60,12 +60,36 @@ class Config:
             "please",
             "make sure",
             "have to",
+            "gotta",
             "todo",
             "to do",
             "follow up",
             "get back to",
         ]
     )
+
+    # Action verbs the keyword extractor looks for. A "weak" trigger (like
+    # "have to") only counts as a task when the sentence also contains one of
+    # these, which filters out banter such as "I have to be a Virgo man".
+    action_verbs: list[str] = field(
+        default_factory=lambda: [
+            "send", "call", "text", "email", "message", "bring", "take", "get",
+            "grab", "pick", "drop", "pay", "book", "buy", "order", "return",
+            "check", "remind", "schedule", "fix", "finish", "sign", "submit",
+            "forward", "share", "confirm", "cancel", "deliver", "mail", "ship",
+            "meet", "add", "update", "review", "print", "deposit", "renew",
+            "download", "upload", "reply", "respond", "watch", "make", "give",
+            "set up", "reach out", "look into", "sort out", "wrap up",
+        ]
+    )
+
+    # Regexes (case-insensitive) for lines to drop as noise even if a trigger
+    # matched. Empty by default; add patterns for junk that keeps slipping in.
+    noise_patterns: list[str] = field(default_factory=list)
+
+    # Similarity threshold (0-1) for treating two todos as the same thing.
+    # Higher = stricter (fewer merges). Used to catch repeats/rephrasings.
+    dedup_threshold: float = 0.7
 
     @property
     def resolved_db_path(self) -> Path:
