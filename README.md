@@ -123,9 +123,25 @@ prints its exact path.
 | `extractor` | `"claude"` or `"keywords"`. |
 | `claude_model` | Model for the Claude extractor. |
 | `keyword_triggers` | Phrases that flag a sentence as a task (keyword mode). |
+| `action_verbs` | Verbs that qualify a weak trigger as a real task (keyword mode). |
+| `noise_patterns` | Regexes for lines to drop as junk (both modes). |
+| `dedup_threshold` | 0–1 similarity for treating two todos as the same repeat. |
 
 `config.json`, the state file, and `PARKER_TODO.md` are gitignored so your
 personal data stays local.
+
+### Cutting noise and catching repeats
+
+- **Junk filtering.** In keyword mode, "weak" triggers like *have to* / *need to*
+  only count as a task when the sentence also contains an **action verb** (send,
+  call, take, …), so banter like *"I have to be a Virgo man"* is ignored. Direct
+  asks (*can you*, *please*, *don't forget*, …) always count.
+- **`noise_patterns`.** For anything specific that still slips through, add a
+  regex (case-insensitive) to drop it, e.g. `["\\bhoroscope\\b", "just kidding"]`.
+- **Repeats.** Items already on the list — including the same thing said in
+  slightly different words (*"take the van back"* vs *"take van back"*) — are not
+  added again. `dedup_threshold` controls how similar counts as a repeat (higher
+  = stricter). **AI mode** is even better at both, since it understands intent.
 
 ### Tests
 

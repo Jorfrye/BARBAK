@@ -17,5 +17,7 @@
     "make sure",
     "have to",
     "follow up"
-  ]
+  ],
+  "noise_patterns": [],
+  "dedup_threshold": 0.7
 }
