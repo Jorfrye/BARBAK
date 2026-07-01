@@ -58,11 +58,28 @@ This project implements the Mac path.
    ```
 
 3. **Pick an extractor** in `config.json`:
-   - `"extractor": "claude"` — set `ANTHROPIC_API_KEY` in your environment and
-     `pip install -r requirements.txt`. Uses `claude_model` (default
-     `claude-sonnet-5`). Falls back to keywords automatically if the key or
-     package is missing.
-   - `"extractor": "keywords"` — pure standard library, nothing to install.
+   - `"extractor": "claude"` — the smart mode; see "AI mode" below.
+   - `"extractor": "keywords"` — pure standard library, nothing to install. A
+     good way to try things out with zero setup.
+
+### AI mode (smarter extraction)
+
+The Claude extractor is better at spotting Parker's actual commitments and
+classifying commitments vs. requests. To enable it:
+
+1. Get an API key from <https://console.anthropic.com> (Settings → API Keys).
+2. Install the client and set the key, then run:
+
+   ```sh
+   pip3 install -r requirements.txt
+   export ANTHROPIC_API_KEY="sk-ant-...your key..."
+   python3 -m parker_todo
+   ```
+
+Make sure `config.json` has `"extractor": "claude"` (it does by default). If the
+key or package is ever missing, it falls back to keyword mode automatically
+rather than failing. The model is set by `claude_model` (default
+`claude-sonnet-5`).
 
 ### Run it
 
@@ -75,35 +92,24 @@ python -m parker_todo -c config.json  # explicit config path
 
 ### Run it automatically (every 15 minutes)
 
-Use a `launchd` agent on the Mac. Save this as
-`~/Library/LaunchAgents/com.barbak.parkertodo.plist` (edit the paths), then
-`launchctl load ~/Library/LaunchAgents/com.barbak.parkertodo.plist`:
+Use the bundled installer — it detects all paths for you and sets up a
+`launchd` job on the Mac:
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.barbak.parkertodo</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>-m</string>
-    <string>parker_todo</string>
-  </array>
-  <key>WorkingDirectory</key><string>/path/to/BARBAK</string>
-  <key>EnvironmentVariables</key>
-  <dict><key>ANTHROPIC_API_KEY</key><string>sk-ant-...</string></dict>
-  <key>StartInterval</key><integer>900</integer>
-  <key>StandardErrorPath</key><string>/tmp/parkertodo.err</string>
-  <key>StandardOutPath</key><string>/tmp/parkertodo.out</string>
-</dict>
-</plist>
+```sh
+scripts/schedule.sh on            # run every 15 minutes (default)
+scripts/schedule.sh on 3600       # or pick an interval in seconds (hourly here)
+scripts/schedule.sh status        # see whether it's installed + the python path
+scripts/schedule.sh off           # stop running automatically
 ```
 
-(Note: `launchd`/`cron` jobs also need Full Disk Access — grant it to
-`/usr/bin/python3`, or run under a wrapper that has it.)
+If `ANTHROPIC_API_KEY` is exported in your shell when you run `on`, the
+scheduled runs use AI mode; otherwise they use keyword mode. Output is logged to
+`schedule.log` in the repo.
+
+**Full Disk Access for scheduled runs:** the job runs as your `python3`, so
+grant Full Disk Access to *that binary* (System Settings → Privacy & Security →
+Full Disk Access → ➕), not just to Terminal. `scripts/schedule.sh status`
+prints its exact path.
 
 ### Configuration reference (`config.json`)
 
