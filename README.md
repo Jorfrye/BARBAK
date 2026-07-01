@@ -28,7 +28,10 @@ This project implements the Mac path.
 
 1. Reads new inbound messages from Parker (matched by phone number / email).
 2. Extracts actionable TODO items from them — via the **Claude API** (smart) or
-   a **keyword heuristic** (no dependencies, no network).
+   a **keyword heuristic** (no dependencies, no network). The Claude extractor
+   prioritizes things **Parker himself committed to do** (the stuff he forgets)
+   and lists them first; things he asks *you* to do are added afterward, labeled
+   `— (Parker asked you)`.
 3. Appends new items to a Markdown checklist (`PARKER_TODO.md`), de-duplicating
    against what's already there. You tick items off with `[x]` yourself.
 4. Remembers the last message it processed so it never double-counts.

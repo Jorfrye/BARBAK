@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from parker_todo.config import Config
-from parker_todo.extract import _todos_from_response, extract_todos
+from parker_todo.extract import _render_items, _todos_from_response, extract_todos
 from parker_todo.messages import Message, decode_attributed_body, fetch_messages
 from parker_todo.todos import add_todos
 
@@ -209,13 +209,14 @@ def test_keyword_does_not_split_on_abbreviation():
 # --- Claude response parsing -------------------------------------------------
 
 def test_json_parse_with_prose_braces():
+    # Backward-compatible with plain-string items (type defaults to "").
     text = 'Sure! The format is {"key": value}. Here: {"todos": ["Pay invoice"]}'
-    assert _todos_from_response(text) == ["Pay invoice"]
+    assert _todos_from_response(text) == [{"task": "Pay invoice", "type": ""}]
 
 
 def test_json_parse_trailing_prose_braces():
     text = '{"todos": ["Call Bob"]}\n\nLet me know if you want me to adjust {these}.'
-    assert _todos_from_response(text) == ["Call Bob"]
+    assert _todos_from_response(text) == [{"task": "Call Bob", "type": ""}]
 
 
 def test_json_parse_empty_todos_is_empty_list_not_none():
@@ -226,6 +227,33 @@ def test_json_parse_unparseable_returns_none():
     # No JSON object at all -> None so the caller falls back to keywords.
     assert _todos_from_response("I could not find any tasks, sorry.") is None
     assert _todos_from_response('{"todos": [') is None  # truncated
+
+
+def test_json_parse_classifies_commitment_and_request():
+    text = (
+        '{"todos": ['
+        '{"task": "Send the contract Monday", "type": "commitment"}, '
+        '{"task": "Forward the vendor email", "type": "request"}]}'
+    )
+    assert _todos_from_response(text) == [
+        {"task": "Send the contract Monday", "type": "commitment"},
+        {"task": "Forward the vendor email", "type": "request"},
+    ]
+
+
+def test_render_items_puts_commitments_first_and_labels_requests():
+    items = [
+        {"task": "Forward the vendor email", "type": "request"},
+        {"task": "Send the contract Monday", "type": "commitment"},
+        {"task": "Call the office", "type": ""},
+    ]
+    rendered = _render_items(items)
+    # Commitments/unknown first (plain), requests last (labeled).
+    assert rendered == [
+        "Send the contract Monday",
+        "Call the office",
+        "Forward the vendor email  — (Parker asked you)",
+    ]
 
 
 # --- TODO file robustness ----------------------------------------------------
