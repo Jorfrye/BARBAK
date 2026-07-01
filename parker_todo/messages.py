@@ -45,31 +45,26 @@ def decode_attributed_body(blob: bytes | None) -> str | None:
     """Best-effort extraction of the readable text from an attributedBody blob.
 
     The blob is an NSKeyedArchiver/typedstream serialization of an
-    NSAttributedString. The visible message text is stored as an NSString
-    immediately after a ``NSString`` class marker, prefixed by a length byte
-    (or a 0x81 + uint16 little-endian length for longer strings).
+    NSAttributedString. After the ``NSString`` class marker the typedstream
+    emits class/version bytes and a ``+`` (0x2b) type-encoding char that
+    introduces the inline string's byte field, followed by a length prefix and
+    then the UTF-8 bytes, e.g. ``NSString \x01\x94 \x84\x01 + <len> <utf8>``.
+
+    We locate that ``+`` marker rather than assuming a fixed offset (real blobs
+    vary), then read the length. The length prefix is a single byte for strings
+    shorter than 128 bytes; otherwise a 0x81 marker means a uint16 (2-byte)
+    little-endian length follows and 0x82 means a uint32 (4-byte) length.
     """
     if not blob:
         return None
-    try:
-        marker = b"NSString"
-        idx = blob.find(marker)
-        if idx == -1:
-            return None
-        # Skip the class name and the following class/version bytes. The layout
-        # is: 'NSString' + 0x01 0x94 (version markers) then the length prefix.
-        pos = idx + len(marker) + 1
-        if pos >= len(blob):
-            return None
-        # There is typically one filler byte (0x94) before the length.
-        if blob[pos] == 0x94:
-            pos += 1
+
+    def _read(start: int) -> str | None:
+        pos = start
         if pos >= len(blob):
             return None
         length_byte = blob[pos]
         pos += 1
         if length_byte == 0x81:
-            # Next two bytes are a little-endian uint16 length.
             if pos + 2 > len(blob):
                 return None
             length = int.from_bytes(blob[pos : pos + 2], "little")
@@ -84,6 +79,24 @@ def decode_attributed_body(blob: bytes | None) -> str | None:
         raw = blob[pos : pos + length]
         text = raw.decode("utf-8", errors="replace").strip()
         return text or None
+
+    try:
+        marker = b"NSString"
+        idx = blob.find(marker)
+        if idx == -1:
+            return None
+        # Preferred: read the length immediately after the '+' (0x2b) type char.
+        plus = blob.find(b"\x2b", idx + len(marker))
+        if plus != -1:
+            text = _read(plus + 1)
+            if text:
+                return text
+        # Fallback for blobs that don't carry the '+' marker: skip the class
+        # name plus a version byte and an optional 0x94 filler, then read.
+        pos = idx + len(marker) + 1
+        if pos < len(blob) and blob[pos] == 0x94:
+            pos += 1
+        return _read(pos)
     except Exception:
         return None
 
@@ -121,8 +134,30 @@ def fetch_messages(
     conn = sqlite3.connect(uri, uri=True)
     try:
         conn.row_factory = sqlite3.Row
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(message)")
+        }
         placeholders = ",".join("?" for _ in contact_identifiers)
         from_me_clause = "" if include_from_me else "AND m.is_from_me = 0"
+
+        # Exclude tapbacks/reactions (Loved/Liked/Emphasized/...), which are
+        # stored as real message rows with associated_message_type != 0 and a
+        # synthetic text like 'Loved "..."'. Also drop unsent/retracted
+        # messages. Both columns are probed for so older schemas still work.
+        extra_clauses = ""
+        if "associated_message_type" in columns:
+            extra_clauses += (
+                "\n              AND (m.associated_message_type = 0 "
+                "OR m.associated_message_type IS NULL)"
+            )
+        if "date_retracted" in columns:
+            # Non-retracted messages have date_retracted = 0 (the schema
+            # default); a retracted/unsent message gets a nonzero timestamp.
+            extra_clauses += (
+                "\n              AND (m.date_retracted = 0 "
+                "OR m.date_retracted IS NULL)"
+            )
+
         sql = f"""
             SELECT m.ROWID       AS rowid,
                    m.text        AS text,
@@ -134,7 +169,7 @@ def fetch_messages(
             JOIN handle AS h ON m.handle_id = h.ROWID
             WHERE h.id IN ({placeholders})
               AND m.ROWID > ?
-              {from_me_clause}
+              {from_me_clause}{extra_clauses}
             ORDER BY m.ROWID ASC
         """
         params = [*contact_identifiers, since_rowid]

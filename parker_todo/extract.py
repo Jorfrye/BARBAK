@@ -14,7 +14,11 @@ import re
 from .config import Config
 from .messages import Message
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# Split on sentence terminators, but not after common abbreviations, and only
+# when the next sentence starts with a capital/quote so "e.g. send it" stays
+# whole. Newlines always split.
+_ABBREV = r"(?<!\be\.g)(?<!\bi\.e)(?<!\betc)(?<!\bMr)(?<!\bMrs)(?<!\bDr)(?<!\bvs)"
+_SENTENCE_SPLIT = re.compile(_ABBREV + r"(?<=[.!?])\s+(?=[\"'A-Z0-9])|\n+")
 
 
 def _keyword_extract(messages: list[Message], cfg: Config) -> list[str]:
@@ -22,13 +26,64 @@ def _keyword_extract(messages: list[Message], cfg: Config) -> list[str]:
     todos: list[str] = []
     for msg in messages:
         for sentence in _SENTENCE_SPLIT.split(msg.text):
+            if sentence is None:
+                continue
             s = sentence.strip()
             if not s:
                 continue
             low = s.lower()
             if any(t in low for t in triggers):
-                todos.append(s.rstrip(".!"))
+                todos.append(s.rstrip(".!? "))
     return todos
+
+
+def _todos_from_response(text: str) -> list[str] | None:
+    """Parse the ``{"todos": [...]}`` object out of a model response.
+
+    Scans for the first balanced-brace JSON object (ignoring braces inside
+    strings) that parses to a dict with a ``todos`` key, so stray braces in the
+    model's prose don't break parsing. Returns the todo list (possibly empty)
+    on success, or ``None`` if no such object could be parsed — the ``None``
+    signals the caller to fall back to keyword extraction.
+    """
+    for candidate in _iter_json_objects(text):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and "todos" in parsed:
+            return [str(t).strip() for t in parsed["todos"] if str(t).strip()]
+    return None
+
+
+def _iter_json_objects(text: str):
+    """Yield each top-level ``{...}`` substring, respecting strings/escapes."""
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth, in_str, esc, j = 0, False, False, i
+        while j < n:
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[i : j + 1]
+                    break
+            j += 1
+        i = j + 1
 
 
 _SYSTEM_PROMPT = (
@@ -55,34 +110,35 @@ def _claude_extract(messages: list[Message], cfg: Config) -> list[str] | None:
     transcript = "\n".join(
         f"[{m.date:%Y-%m-%d %H:%M}] {cfg.contact_name}: {m.text}" for m in messages
     )
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-    resp = client.messages.create(
-        model=cfg.claude_model,
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT.format(name=cfg.contact_name),
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    "Extract the TODO items from these messages:\n\n"
-                    + transcript
-                ),
-            }
-        ],
-    )
-    text = "".join(
-        block.text for block in resp.content if getattr(block, "type", None) == "text"
-    ).strip()
-    # The model may wrap JSON in prose or fences; pull out the JSON object.
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return []
     try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return []
-    todos = parsed.get("todos", [])
-    return [str(t).strip() for t in todos if str(t).strip()]
+        client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+        resp = client.messages.create(
+            model=cfg.claude_model,
+            max_tokens=1024,
+            system=_SYSTEM_PROMPT.format(name=cfg.contact_name),
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Extract the TODO items from these messages:\n\n"
+                        + transcript
+                    ),
+                }
+            ],
+        )
+        text = "".join(
+            block.text
+            for block in resp.content
+            if getattr(block, "type", None) == "text"
+        ).strip()
+    except Exception:
+        # Network/auth/rate-limit/etc.: treat Claude as unavailable so the
+        # caller falls back to keyword extraction rather than crashing.
+        return None
+    # Returns the parsed todo list, or None if the response wasn't parseable
+    # (which makes extract_todos fall back to keywords instead of dropping the
+    # batch as "no todos found").
+    return _todos_from_response(text)
 
 
 def extract_todos(messages: list[Message], cfg: Config) -> list[str]:
